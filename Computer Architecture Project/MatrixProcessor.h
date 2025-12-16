@@ -178,5 +178,95 @@ public:
     int getInstructionCount() const { return instructionCount; }
     double getCPI() const { return instructionCount > 0 ? (double)cycleCount / instructionCount : 0; }
 };
+struct PipelineRegister {
+    bool valid;
+    Instruction inst;
+    uint32_t pc;
+
+    // ID/EX stage
+    int readData1, readData2;
+    int immediate;
+    bool branchTaken;
+
+    // EX/MEM stage
+    int aluResult;
+    int memWriteData;
+    bool memRead, memWrite;
+
+    // MEM/WB stage
+    int memReadData;
+    int writeBackData;
+    bool regWrite;
+    int destReg;
+
+    PipelineRegister() : valid(false), pc(0), readData1(0), readData2(0),
+        immediate(0), branchTaken(false), aluResult(0),
+        memWriteData(0), memRead(false), memWrite(false),
+        memReadData(0), writeBackData(0), regWrite(false),
+        destReg(0) {
+    }
+};
+
+class PipelinedSimulator {
+private:
+    // Memory and registers
+    int memory[MEMORY_SIZE];
+    int registers[NUM_REGISTERS];
+    MatrixDescriptor matrixDescriptors[NUM_MATRIX_DESCRIPTORS];
+
+    // Instruction memory
+    std::vector<uint32_t> instructionMemory;
+    std::vector<Instruction> decodedInstructions;
+
+    // Pipeline registers
+    PipelineRegister IF_ID;   // Fetch -> Decode
+    PipelineRegister ID_EX;   // Decode -> Execute
+    PipelineRegister EX_MEM;  // Execute -> Memory
+    PipelineRegister MEM_WB;  // Memory -> WriteBack
+
+    // Control signals
+    bool stall;
+    bool flush;
+    int pc;
+    bool halted;
+
+    // Performance counters
+    int cycleCount;
+    int instructionCount;
+    int stallCount;
+    int dataHazardCount;
+    int controlHazardCount;
+
+    // Trace file
+    std::ofstream traceFile;
+
+public:
+    PipelinedSimulator();
+    void loadProgram(const std::string& filename);
+    void run();
+
+    // Pipeline stages
+    void fetch();
+    void decode();
+    void execute();
+    void memoryAccess();
+    void writeBack();
+
+    // Hazard detection and handling
+    bool detectDataHazard();
+    bool detectControlHazard();
+    void handleDataHazard();
+    void handleControlHazard();
+    bool needsForwarding(int rs, int& forwardValue);
+
+    // Helper functions
+    void printState();
+    void printPipelineState();
+    void printMemoryRange(int start, int end);
+    int getCycleCount() const { return cycleCount; }
+    int getInstructionCount() const { return instructionCount; }
+    int getStallCount() const { return stallCount; }
+    double getCPI() const { return (double)cycleCount / instructionCount; }
+};
 
 #endif // MATRIX_PROCESSOR_H

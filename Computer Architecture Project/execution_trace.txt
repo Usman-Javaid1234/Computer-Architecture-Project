@@ -1,39 +1,39 @@
 === Execution Trace ===
 
 Cycle 0, PC=0
-  DECLAREM M0, 2, 2 -> Base: 400
+  LW R1 = MEM[100] (=10)
 
 Cycle 1, PC=1
-  LOADM M0 from 0
+  BLT R1 (=10), R0 (=0) -> NOT TAKEN
 
-Cycle 5, PC=2
-  DECLAREM M1, 2, 2 -> Base: 404
+Cycle 2, PC=2
+  LI R2 = 1
 
-Cycle 6, PC=3
-  LOADM M1 from 100
+Cycle 3, PC=3
+  LW R3 = MEM[104] (=20)
 
-Cycle 10, PC=4
-  DECLAREM M2, 2, 2 -> Base: 408
+Cycle 4, PC=4
+  ADD R4 = R3 + R1 (=30)
 
-Cycle 11, PC=5
-  LOADM M2 from 200
+Cycle 5, PC=5
+  LW R5 = MEM[108] (=5)
 
-Cycle 15, PC=6
-  ADDM M3 = M0 + M1
+Cycle 6, PC=6
+  SUBI R5 = R5 - 1 (=4)
 
-Cycle 19, PC=7
-  SUBM M4 = M3 - M2
+Cycle 7, PC=7
+  BNE R5 (=4), R0 (=0) -> BRANCH TAKEN to 9
 
-Cycle 23, PC=8
-  STOREM M4 to 300
+Cycle 8, PC=9
+  BLT R5 (=4), R1 (=10) -> BRANCH TAKEN to 11
 
-Cycle 27, PC=9
-  DETERMINANT R1 = det(M4) = -23
+Cycle 9, PC=11
+  SW MEM[112] = R4 (=30)
 
-Cycle 35, PC=10
+Cycle 10, PC=12
   HALT - Program terminated
 
 === Execution Complete ===
-Total Cycles: 35
+Total Cycles: 10
 Instructions Executed: 11
-CPI: 3.18182
+CPI: 0.909091

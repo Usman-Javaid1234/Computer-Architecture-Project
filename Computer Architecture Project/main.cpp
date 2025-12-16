@@ -53,7 +53,7 @@ int main(int argc, char* argv[]) {
 
     std::cout << std::endl;
 
-    std::string filename = "program1.asm";
+    std::string filename = "program2.asm";
 
     if (argc > 1) {
         filename = argv[1];
@@ -68,7 +68,7 @@ int main(int argc, char* argv[]) {
 
     try {
         // Create pipelined simulator instance
-        PipelinedSimulator sim;
+        SingleCycleSimulator sim;
 
         // Load and parse assembly program
         sim.loadProgram(filename);
@@ -85,26 +85,56 @@ int main(int argc, char* argv[]) {
         std::cout << "========================================" << std::endl;
 
         sim.printMemoryRange(0, 10);
-        sim.printMemoryRange(100, 110);
+        sim.printMemoryRange(100, 120);
         sim.printMemoryRange(200, 210);
         sim.printMemoryRange(300, 310);
         sim.printMemoryRange(400, 420);
+        sim.printMemoryRange(500, 520);
         sim.printMemoryRange(900, 935);
+		sim.printMemoryRange(800, 820);
 
         // Display performance metrics
         std::cout << "\n========================================" << std::endl;
-        std::cout << "PIPELINE PERFORMANCE METRICS" << std::endl;
+        std::cout << "Single cycle PERFORMANCE METRICS" << std::endl;
         std::cout << "========================================" << std::endl;
         std::cout << "  Total Cycles:       " << sim.getCycleCount() << std::endl;
         std::cout << "  Instructions:       " << sim.getInstructionCount() << std::endl;
         std::cout << "  CPI:                " << std::fixed << std::setprecision(2)
             << sim.getCPI() << std::endl;
-        std::cout << "  Pipeline Stalls:    " << sim.getStallCount() << std::endl;
         std::cout << "========================================" << std::endl;
 
-        std::cout << "\nDetailed pipeline trace: pipeline_trace.txt" << std::endl;
-        std::cout << "\nPipelined simulation completed successfully!" << std::endl;
+        std::cout << "\n Single cycle simulation completed successfully!" << std::endl;
+		PipelinedSimulator pipelinedSim;
+        pipelinedSim.loadProgram(filename);
+		pipelinedSim.run();
+        // Display final processor state
+        sim.printState();
 
+        // Display memory contents
+        std::cout << "\n========================================" << std::endl;
+        std::cout << "MEMORY CONTENTS" << std::endl;
+        std::cout << "========================================" << std::endl;
+
+        pipelinedSim.printMemoryRange(0, 10);
+        pipelinedSim.printMemoryRange(100, 120);
+        pipelinedSim.printMemoryRange(200, 210);
+        pipelinedSim.printMemoryRange(300, 310);
+        pipelinedSim.printMemoryRange(400, 420);
+        pipelinedSim.printMemoryRange(900, 935);
+        pipelinedSim.printMemoryRange(800, 820);
+		pipelinedSim.printMemoryRange(500, 520);
+
+        // Display performance metrics
+        std::cout << "\n========================================" << std::endl;
+        std::cout << "Pipelined PERFORMANCE METRICS" << std::endl;
+        std::cout << "========================================" << std::endl;
+        std::cout << "  Total Cycles:       " << pipelinedSim.getCycleCount() << std::endl;
+        std::cout << "  Instructions:       " << pipelinedSim.getInstructionCount() << std::endl;
+        std::cout << "  CPI:                " << std::fixed << std::setprecision(2)
+            << pipelinedSim.getCPI() << std::endl;
+        std::cout << "========================================" << std::endl;
+
+        std::cout << "\nPipelined simulation completed successfully!" << std::endl;
     }
     catch (const std::exception& e) {
         std::cerr << "\n========================================" << std::endl;

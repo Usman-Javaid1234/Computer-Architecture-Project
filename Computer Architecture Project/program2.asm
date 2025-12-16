@@ -1,87 +1,243 @@
-# ===============================================
-# PROGRAM 2: Control Flow & Loop
-# Assignment 3, Task B (10-15 instructions)
+﻿# ===============================================
+# PROGRAM 2: Simple Hazard Demonstration
+# Focus: Load-Use Stalls & Branch Flushes
 # ===============================================
 #
-# Purpose: Countdown loop + array threshold filter
-# Total Instructions: 16
+# Purpose: Clear demonstration of:
+#   1. Load-Use Data Hazards (require stalls)
+#   2. Branch Control Hazards (require flushes)
+#
+# Design: Minimal code, maximum clarity
+# Total Instructions: 12
+# Expected Stalls: 2
+# Expected Flushes: 2
 # ===============================================
 
 .data
-# Counter value N
-N_VALUE: 900
+# Simple data values
+VALUE1: 100
+    10
+
+VALUE2: 104
+    20
+
+VALUE3: 108
     5
 
-# Array of 4 values
-ARRAY: 910
-    10, 3, 15, 2
-
-# Threshold value
-THRESHOLD: 920
-    5
+RESULT: 112
+    0
 
 .text
-# ===== Part 1: Countdown Loop =====
-# Initialize: counter = 5, sum = 0
+# ===== Part 1: LOAD-USE STALL #1 =====
+# Demonstrates: Classic load-use data hazard
 
-# Instruction 1: Load counter value N into R1
-LW R1, 900(R0)
+# Instruction 1: Load VALUE1 into R1
+LW R1, 100(R0)              # R1 = 10
 
-# Instruction 2: Initialize sum to 0
-LI R2, 0
+# Instruction 2: Use R1 immediately - STALL!
+# CRITICAL: BLT needs R1 but LW hasn't completed
+# Pipeline MUST insert 1-cycle STALL here
+BLT R1, R0, SKIP1           # Compare R1 with 0 (not taken)
+                            # DATA HAZARD: Load-use on R1
+                            # STALL: 1 cycle inserted
 
-COUNTDOWN_LOOP:
-# Instruction 3: Add current counter to sum
-ADD R2, R2, R1
+# Instruction 3: This will execute after branch resolves
+LI R2, 1                    # R2 = 1 (mark: we didn't skip)
 
-# Instruction 4: Decrement counter
-SUBI R1, R1, 1
+SKIP1:
+# ===== Part 2: LOAD-USE STALL #2 =====
+# Demonstrates: Another load-use pattern
 
-# Instruction 5: Check if counter > 0
-BNE R1, R0, COUNTDOWN_LOOP
+# Instruction 4: Load VALUE2 into R3
+LW R3, 104(R0)              # R3 = 20
 
-# ===== Part 2: Array Threshold Filter =====
+# Instruction 5: Add using loaded value - STALL!
+# CRITICAL: ADD needs R3 but LW hasn't completed
+# Pipeline MUST insert 1-cycle STALL here
+ADD R4, R3, R1              # R4 = R3 + R1 = 30
+                            # DATA HAZARD: Load-use on R3
+                            # STALL: 1 cycle inserted
 
-# Instruction 6: Load threshold into R3
-LW R3, 920(R0)
+# ===== Part 3: BRANCH FLUSH #1 =====
+# Demonstrates: Taken branch causing flush
 
-# Instruction 7: Initialize array index
-LI R4, 910
+# Instruction 6: Load counter
+LW R5, 108(R0)              # R5 = 5
 
-# Instruction 8: Initialize counter for 4 elements
-LI R5, 4
+# Instruction 7: Decrement counter
+SUBI R5, R5, 1              # R5 = 4
 
-FILTER_LOOP:
-# Instruction 9: Load array element
-LW R6, 0(R4)
+# Instruction 8: Branch if not zero - TAKEN!
+# CRITICAL: Branch will be taken, next instruction flushed
+BNE R5, R0, CONTINUE        # Branch to CONTINUE
+                            # CONTROL HAZARD: Branch taken
+                            # FLUSH: Next instruction killed
 
-# Instruction 10: Compare with threshold
-BLT R6, R3, SET_ZERO
-J KEEP_VALUE
+# Instruction 9: This gets FLUSHED (never executes)
+LI R6, 99                   # NEVER EXECUTES (flushed)
 
-SET_ZERO:
-# Instruction 11: Set to 0
-LI R6, 0
+CONTINUE:
+# ===== Part 4: BRANCH FLUSH #2 =====
+# Demonstrates: Another taken branch
 
-KEEP_VALUE:
-# Instruction 12: Store back
-SW R6, 0(R4)
+# Instruction 10: Compare values
+BLT R5, R1, END             # if R5 < R1, go to END
+                            # R5=4, R1=10, so TAKEN
+                            # CONTROL HAZARD: Branch taken
+                            # FLUSH: Next instruction killed
 
-# Instruction 13: Move to next element
-ADDI R4, R4, 1
+# Instruction 11: This gets FLUSHED (never executes)
+LI R7, 88                   # NEVER EXECUTES (flushed)
 
-# Instruction 14: Decrement counter
-SUBI R5, R5, 1
-BNE R5, R0, FILTER_LOOP
+END:
+# Instruction 12: Store result
+SW R4, 112(R0)              # Store R4=30 to memory
 
-# Instruction 15: Store final sum
-SW R2, 930(R0)
-
-# Instruction 16: Halt
+# Instruction 13: Halt
 HALT
 
 # ===============================================
-# Expected Results:
-# Sum at address 930: 15
-# Filtered array at 910-913: [10, 0, 15, 0]
+# EXPECTED RESULTS
+# ===============================================
+#
+# Registers:
+#   R0 = 0 (always zero)
+#   R1 = 10 (from VALUE1)
+#   R2 = 1 (executed, not skipped)
+#   R3 = 20 (from VALUE2)
+#   R4 = 30 (R3 + R1 = 20 + 10)
+#   R5 = 4 (decremented from 5)
+#   R6 = 0 (never set, instruction flushed)
+#   R7 = 0 (never set, instruction flushed)
+#
+# Memory:
+#   [100] = 10 (VALUE1)
+#   [104] = 20 (VALUE2)
+#   [108] = 5 (VALUE3)
+#   [112] = 30 (RESULT = R4)
+#
+# ===============================================
+# PIPELINE ANALYSIS
+# ===============================================
+#
+# Total Instructions: 13
+# Completed Instructions: 11 (2 flushed, never complete)
+#
+# STALLS:
+#   Stall #1: Instruction 2 (BLT after LW R1)
+#   Stall #2: Instruction 5 (ADD after LW R3)
+#   Total Stalls: 2
+#
+# FLUSHES:
+#   Flush #1: Instruction 9 (LI R6 after BNE)
+#   Flush #2: Instruction 11 (LI R7 after BLT)
+#   Total Flushes: 2
+#
+# PERFORMANCE:
+#   Base Cycles: 13 (if no hazards)
+#   Stall Penalty: 2 cycles
+#   Flush Penalty: 2 cycles
+#   Total Cycles: 17
+#   Instructions Completed: 11
+#   CPI: 17/11 = 1.55
+#
+# ===============================================
+# HAZARD TIMELINE
+# ===============================================
+#
+# STALL #1 (Instructions 1-2):
+# ----------------------------
+# Cycle  1: LW R1 in IF
+# Cycle  2: LW R1 in ID,  BLT in IF
+# Cycle  3: LW R1 in EX,  BLT in ID
+# Cycle  4: LW R1 in MEM, **STALL** detected!
+#           BLT needs R1 but not available yet
+#           Pipeline inserts BUBBLE in ID/EX
+#           BLT stays in IF/ID
+# Cycle  5: LW R1 in WB,  BLT in ID (held)
+#           R1 now available via MEM/WB forwarding
+# Cycle  6: BLT in EX (finally proceeds)
+#
+# STALL #2 (Instructions 4-5):
+# ----------------------------
+# Similar pattern for LW R3 followed by ADD R4,R3,R1
+# 1 cycle stall inserted
+#
+# FLUSH #1 (Instructions 8-9):
+# ----------------------------
+# Cycle N:   BNE in IF
+# Cycle N+1: BNE in ID, LI R6 in IF (speculative)
+# Cycle N+2: BNE in EX, LI R6 in ID
+#            Branch resolves as TAKEN
+#            PC updated to CONTINUE
+#            LI R6 in IF/ID is FLUSHED (killed)
+# Cycle N+3: [CONTINUE] in IF
+#
+# FLUSH #2 (Instructions 10-11):
+# ----------------------------
+# Similar pattern for BLT followed by LI R7
+# Instruction flushed when branch taken
+#
+# ===============================================
+# VERIFICATION CHECKLIST
+# ===============================================
+#
+# ✓ R1 = 10 (loaded correctly)
+# ✓ R2 = 1 (branch not taken, executed)
+# ✓ R3 = 20 (loaded correctly)
+# ✓ R4 = 30 (addition with forwarding after stall)
+# ✓ R5 = 4 (decremented)
+# ✓ R6 = 0 (flushed, never set)
+# ✓ R7 = 0 (flushed, never set)
+# ✓ Memory[112] = 30 (result stored)
+#
+# ✓ Pipeline Stalls = 2
+# ✓ Data Hazards = 2
+# ✓ Control Hazards = 2
+# ✓ Total Cycles ≈ 17
+# ✓ CPI ≈ 1.55
+#
+# ===============================================
+# KEY LEARNING POINTS
+# ===============================================
+#
+# 1. LOAD-USE HAZARDS:
+#    - LW followed immediately by instruction using result
+#    - Cannot be resolved by forwarding alone
+#    - Requires 1-cycle pipeline stall
+#    - After stall, forwarding provides correct value
+#
+# 2. BRANCH CONTROL HAZARDS:
+#    - Branch direction unknown until EX stage
+#    - "Predict not taken" - fetch sequential instruction
+#    - If branch taken, flush speculatively fetched instruction
+#    - Update PC to branch target
+#    - 1-cycle penalty for each taken branch
+#
+# 3. FORWARDING vs STALLING:
+#    - Forwarding works for ALU-to-ALU dependencies
+#    - Stalling required when data not yet computed (load-use)
+#    - Example: SUBI R5,R5,1 followed by BNE R5,R0
+#      → R5 forwarded from EX/MEM, no stall needed
+#
+# 4. FLUSHED INSTRUCTIONS:
+#    - Never complete execution
+#    - Don't appear in instruction count
+#    - Still consume 1-2 cycles in pipeline before flush
+#    - Registers remain unchanged
+#
+# ===============================================
+# TRACE FILE EVIDENCE
+# ===============================================
+#
+# Look for these patterns in pipeline_trace.txt:
+#
+# [DATA HAZARD DETECTED] Load-use hazard on R1
+# [STALL INSERTED] Stalling pipeline for 1 cycle
+# [PIPELINE STATE] IF:- ID:- EX:V MEM:V [STALLED]
+#
+# [CONTROL HAZARD DETECTED] Branch/Jump in EX stage
+# [FLUSH] Flushing IF/ID due to taken branch
+# [PIPELINE STATE] IF:V ID:- EX:V MEM:V [FLUSHED]
+#
 # ===============================================
