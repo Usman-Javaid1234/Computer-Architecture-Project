@@ -162,35 +162,35 @@ int SingleCycleSimulator::calculateDeterminant(int baseAddr, int n) {
 
 // Matrix instruction implementations
 void SingleCycleSimulator::executeDECLAREM(const Instruction& inst) {
-    matrixDescriptors[inst.md].rows = inst.rows;
-    matrixDescriptors[inst.md].cols = inst.cols;
-    matrixDescriptors[inst.md].valid = true;
-
     // Allocate memory starting from address 400 to avoid overwriting data section
     static int nextAddress = 400;
-    matrixDescriptors[inst.md].baseAddress = nextAddress;
+    uint32_t allocatedBase = nextAddress;
     nextAddress += inst.rows * inst.cols;
+
+    // Atomic MSPR write - simulates parallel hardware register write in WB stage
+    mspr.writeMatrix(inst.md, allocatedBase, inst.rows, inst.cols);
 
     // Zero-initialize the allocated space
     for (int i = 0; i < inst.rows * inst.cols; i++) {
-        memory[matrixDescriptors[inst.md].baseAddress + i] = 0;
+        memory[allocatedBase + i] = 0;
     }
 
     traceFile << "  DECLAREM M" << inst.md << ", " << inst.rows << ", " << inst.cols
-        << " -> Base: " << matrixDescriptors[inst.md].baseAddress << std::endl;
+        << " -> Base: " << mspr.readBase(inst.md)
+        << " [MSPR Write: Atomic]" << std::endl;
 
     cycleCount += 1;
 }
 
 void SingleCycleSimulator::executeLOADM(const Instruction& inst) {
-    if (!matrixDescriptors[inst.md].valid) {
+    if (!mspr.isValid(inst.md)) {
         std::cerr << "Error: Matrix M" << inst.md << " not declared!" << std::endl;
         return;
     }
 
-    int rows = matrixDescriptors[inst.md].rows;
-    int cols = matrixDescriptors[inst.md].cols;
-    int destAddr = matrixDescriptors[inst.md].baseAddress;
+    int rows = mspr.readRows(inst.md);
+    int cols = mspr.readCols(inst.md);
+    int destAddr = mspr.readBase(inst.md);
     int srcAddr = inst.address;
 
     for (int i = 0; i < rows * cols; i++) {
@@ -202,14 +202,14 @@ void SingleCycleSimulator::executeLOADM(const Instruction& inst) {
 }
 
 void SingleCycleSimulator::executeSTOREM(const Instruction& inst) {
-    if (!matrixDescriptors[inst.md].valid) {
+    if (!mspr.isValid(inst.md)) {
         std::cerr << "Error: Matrix M" << inst.md << " not declared!" << std::endl;
         return;
     }
 
-    int rows = matrixDescriptors[inst.md].rows;
-    int cols = matrixDescriptors[inst.md].cols;
-    int srcAddr = matrixDescriptors[inst.md].baseAddress;
+    int rows = mspr.readRows(inst.md);
+    int cols = mspr.readCols(inst.md);
+    int srcAddr = mspr.readBase(inst.md);
     int destAddr = inst.address;
 
     for (int i = 0; i < rows * cols; i++) {
@@ -221,81 +221,90 @@ void SingleCycleSimulator::executeSTOREM(const Instruction& inst) {
 }
 
 void SingleCycleSimulator::executeADDM(const Instruction& inst) {
-    if (!matrixDescriptors[inst.ms1].valid || !matrixDescriptors[inst.ms2].valid) return;
+    if (!mspr.isValid(inst.ms1) || !mspr.isValid(inst.ms2)) return;
 
-    int rows = matrixDescriptors[inst.ms1].rows;
-    int cols = matrixDescriptors[inst.ms1].cols;
+    int rows = mspr.readRows(inst.ms1);
+    int cols = mspr.readCols(inst.ms1);
 
-    matrixDescriptors[inst.md].rows = rows;
-    matrixDescriptors[inst.md].cols = cols;
-    matrixDescriptors[inst.md].valid = true;
-
-    if (matrixDescriptors[inst.md].baseAddress == 0 || matrixDescriptors[inst.md].baseAddress < 400) {
+    // Allocate memory for result if not already allocated
+    if (mspr.readBase(inst.md) == 0 || mspr.readBase(inst.md) < 400) {
         static int nextAddr = 600;  // Start result matrices at 600
-        matrixDescriptors[inst.md].baseAddress = nextAddr;
+        mspr.writeMatrix(inst.md, nextAddr, rows, cols);  // Atomic write
         nextAddr += rows * cols;
     }
+    else {
+        // Just update dimensions if already allocated
+        mspr.writeRows(inst.md, rows);
+        mspr.writeCols(inst.md, cols);
+        mspr.setValid(inst.md, true);
+    }
 
-    int addr1 = matrixDescriptors[inst.ms1].baseAddress;
-    int addr2 = matrixDescriptors[inst.ms2].baseAddress;
-    int addrDest = matrixDescriptors[inst.md].baseAddress;
+    int addr1 = mspr.readBase(inst.ms1);
+    int addr2 = mspr.readBase(inst.ms2);
+    int addrDest = mspr.readBase(inst.md);
 
     for (int i = 0; i < rows * cols; i++) {
         memory[addrDest + i] = memory[addr1 + i] + memory[addr2 + i];
     }
 
-    traceFile << "  ADDM M" << inst.md << " = M" << inst.ms1 << " + M" << inst.ms2 << std::endl;
+    traceFile << "  ADDM M" << inst.md << " = M" << inst.ms1 << " + M" << inst.ms2
+        << " [MSPR Dest: " << addrDest << "]" << std::endl;
     cycleCount += rows * cols;
 }
 
 void SingleCycleSimulator::executeSUBM(const Instruction& inst) {
-    if (!matrixDescriptors[inst.ms1].valid || !matrixDescriptors[inst.ms2].valid) return;
+    if (!mspr.isValid(inst.ms1) || !mspr.isValid(inst.ms2)) return;
 
-    int rows = matrixDescriptors[inst.ms1].rows;
-    int cols = matrixDescriptors[inst.ms1].cols;
+    int rows = mspr.readRows(inst.ms1);
+    int cols = mspr.readCols(inst.ms1);
 
-    matrixDescriptors[inst.md].rows = rows;
-    matrixDescriptors[inst.md].cols = cols;
-    matrixDescriptors[inst.md].valid = true;
-
-    if (matrixDescriptors[inst.md].baseAddress == 0 || matrixDescriptors[inst.md].baseAddress < 400) {
+    // Allocate memory for result if not already allocated
+    if (mspr.readBase(inst.md) == 0 || mspr.readBase(inst.md) < 400) {
         static int nextAddr = 650;  // Continue after ADDM allocations
-        matrixDescriptors[inst.md].baseAddress = nextAddr;
+        mspr.writeMatrix(inst.md, nextAddr, rows, cols);  // Atomic write
         nextAddr += rows * cols;
     }
+    else {
+        mspr.writeRows(inst.md, rows);
+        mspr.writeCols(inst.md, cols);
+        mspr.setValid(inst.md, true);
+    }
 
-    int addr1 = matrixDescriptors[inst.ms1].baseAddress;
-    int addr2 = matrixDescriptors[inst.ms2].baseAddress;
-    int addrDest = matrixDescriptors[inst.md].baseAddress;
+    int addr1 = mspr.readBase(inst.ms1);
+    int addr2 = mspr.readBase(inst.ms2);
+    int addrDest = mspr.readBase(inst.md);
 
     for (int i = 0; i < rows * cols; i++) {
         memory[addrDest + i] = memory[addr1 + i] - memory[addr2 + i];
     }
 
-    traceFile << "  SUBM M" << inst.md << " = M" << inst.ms1 << " - M" << inst.ms2 << std::endl;
+    traceFile << "  SUBM M" << inst.md << " = M" << inst.ms1 << " - M" << inst.ms2
+        << " [MSPR Dest: " << addrDest << "]" << std::endl;
     cycleCount += rows * cols;
 }
 
 void SingleCycleSimulator::executeMULM(const Instruction& inst) {
-    if (!matrixDescriptors[inst.ms1].valid || !matrixDescriptors[inst.ms2].valid) return;
+    if (!mspr.isValid(inst.ms1) || !mspr.isValid(inst.ms2)) return;
 
-    int m = matrixDescriptors[inst.ms1].rows;
-    int n = matrixDescriptors[inst.ms1].cols;
-    int p = matrixDescriptors[inst.ms2].cols;
+    int m = mspr.readRows(inst.ms1);
+    int n = mspr.readCols(inst.ms1);
+    int p = mspr.readCols(inst.ms2);
 
-    matrixDescriptors[inst.md].rows = m;
-    matrixDescriptors[inst.md].cols = p;
-    matrixDescriptors[inst.md].valid = true;
-
-    if (matrixDescriptors[inst.md].baseAddress == 0 || matrixDescriptors[inst.md].baseAddress < 400) {
+    // Allocate memory for result if not already allocated
+    if (mspr.readBase(inst.md) == 0 || mspr.readBase(inst.md) < 400) {
         static int nextAddr = 500;
-        matrixDescriptors[inst.md].baseAddress = nextAddr;
+        mspr.writeMatrix(inst.md, nextAddr, m, p);  // Atomic write
         nextAddr += m * p;
+    }
+    else {
+        mspr.writeRows(inst.md, m);
+        mspr.writeCols(inst.md, p);
+        mspr.setValid(inst.md, true);
     }
 
     std::vector<std::vector<int>> A, B, C(m, std::vector<int>(p, 0));
-    getMatrixFromMemory(matrixDescriptors[inst.ms1].baseAddress, m, n, A);
-    getMatrixFromMemory(matrixDescriptors[inst.ms2].baseAddress, n, p, B);
+    getMatrixFromMemory(mspr.readBase(inst.ms1), m, n, A);
+    getMatrixFromMemory(mspr.readBase(inst.ms2), n, p, B);
 
     for (int i = 0; i < m; i++) {
         for (int j = 0; j < p; j++) {
@@ -305,31 +314,36 @@ void SingleCycleSimulator::executeMULM(const Instruction& inst) {
         }
     }
 
-    writeMatrixToMemory(matrixDescriptors[inst.md].baseAddress, C);
+    writeMatrixToMemory(mspr.readBase(inst.md), C);
 
-    traceFile << "  MULM M" << inst.md << " = M" << inst.ms1 << " * M" << inst.ms2 << std::endl;
+    traceFile << "  MULM M" << inst.md << " = M" << inst.ms1 << " * M" << inst.ms2
+        << " [MSPR Dest: " << mspr.readBase(inst.md) << "]" << std::endl;
     cycleCount += m * n * p;
 }
 
 void SingleCycleSimulator::executeSCALE(const Instruction& inst) {
-    if (!matrixDescriptors[inst.ms1].valid) return;
+    if (!mspr.isValid(inst.ms1)) return;
 
-    int rows = matrixDescriptors[inst.ms1].rows;
-    int cols = matrixDescriptors[inst.ms1].cols;
+    int rows = mspr.readRows(inst.ms1);
+    int cols = mspr.readCols(inst.ms1);
     int scalar = registers[inst.rs1];
 
-    matrixDescriptors[inst.md].rows = rows;
-    matrixDescriptors[inst.md].cols = cols;
-    matrixDescriptors[inst.md].valid = true;
 
-    if (matrixDescriptors[inst.md].baseAddress == 0 || matrixDescriptors[inst.md].baseAddress < 400) {
+    // Allocate memory for result if not already allocated
+    if (mspr.readBase(inst.md) == 0 || mspr.readBase(inst.md) < 400) {
         static int nextAddr = 500;
-        matrixDescriptors[inst.md].baseAddress = nextAddr;
+        mspr.writeMatrix(inst.md, nextAddr, rows, cols);  // Atomic write
         nextAddr += rows * cols;
     }
+    else {
+        mspr.writeRows(inst.md, rows);
+        mspr.writeCols(inst.md, cols);
+        mspr.setValid(inst.md, true);
+    }
 
-    int srcAddr = matrixDescriptors[inst.ms1].baseAddress;
-    int destAddr = matrixDescriptors[inst.md].baseAddress;
+
+    int srcAddr = mspr.readBase(inst.ms1);
+    int destAddr = mspr.readBase(inst.md);
 
     for (int i = 0; i < rows * cols; i++) {
         memory[destAddr + i] = memory[srcAddr + i] * scalar;
@@ -341,10 +355,10 @@ void SingleCycleSimulator::executeSCALE(const Instruction& inst) {
 }
 
 void SingleCycleSimulator::executeDETERMINANT(const Instruction& inst) {
-    if (!matrixDescriptors[inst.ms1].valid) return;
+    if (!mspr.isValid(inst.ms1)) return;
 
-    int n = matrixDescriptors[inst.ms1].rows;
-    int det = calculateDeterminant(matrixDescriptors[inst.ms1].baseAddress, n);
+    int n = mspr.readRows(inst.ms1);
+    int det = calculateDeterminant(mspr.readBase(inst.ms1), n);
     registers[inst.rd] = det;
 
     traceFile << "  DETERMINANT R" << inst.rd << " = det(M" << inst.ms1 << ") = " << det << std::endl;
@@ -352,23 +366,26 @@ void SingleCycleSimulator::executeDETERMINANT(const Instruction& inst) {
 }
 
 void SingleCycleSimulator::executeTRANSPOSE(const Instruction& inst) {
-    if (!matrixDescriptors[inst.ms1].valid) return;
+    if (!mspr.isValid(inst.ms1)) return;
 
-    int rows = matrixDescriptors[inst.ms1].rows;
-    int cols = matrixDescriptors[inst.ms1].cols;
+    int rows = mspr.readRows(inst.ms1);
+    int cols = mspr.readCols(inst.ms1);
 
-    matrixDescriptors[inst.md].rows = cols;
-    matrixDescriptors[inst.md].cols = rows;
-    matrixDescriptors[inst.md].valid = true;
-
-    if (matrixDescriptors[inst.md].baseAddress == 0 || matrixDescriptors[inst.md].baseAddress < 400) {
+    // Allocate memory for result if not already allocated
+    // Note: Transpose swaps dimensions - result is cols x rows
+    if (mspr.readBase(inst.md) == 0 || mspr.readBase(inst.md) < 400) {
         static int nextAddr = 500;
-        matrixDescriptors[inst.md].baseAddress = nextAddr;
+        mspr.writeMatrix(inst.md, nextAddr, cols, rows);  // Atomic write - SWAPPED dimensions
         nextAddr += rows * cols;
+    }
+    else {
+        mspr.writeRows(inst.md, cols);  // SWAPPED
+        mspr.writeCols(inst.md, rows);  // SWAPPED
+        mspr.setValid(inst.md, true);
     }
 
     std::vector<std::vector<int>> A, AT(cols, std::vector<int>(rows));
-    getMatrixFromMemory(matrixDescriptors[inst.ms1].baseAddress, rows, cols, A);
+    getMatrixFromMemory(mspr.readBase(inst.ms1), rows, cols, A);
 
     for (int i = 0; i < rows; i++) {
         for (int j = 0; j < cols; j++) {
@@ -376,11 +393,13 @@ void SingleCycleSimulator::executeTRANSPOSE(const Instruction& inst) {
         }
     }
 
-    writeMatrixToMemory(matrixDescriptors[inst.md].baseAddress, AT);
+    writeMatrixToMemory(mspr.readBase(inst.md), AT);
 
-    traceFile << "  TRANSPOSE M" << inst.md << " = M" << inst.ms1 << "^T" << std::endl;
+    traceFile << "  TRANSPOSE M" << inst.md << " = M" << inst.ms1 << "^T"
+        << " [Dims: " << cols << "x" << rows << "]" << std::endl;
     cycleCount += rows * cols;
 }
+
 
 // Scalar instruction implementations
 void SingleCycleSimulator::executeADDI(const Instruction& inst) {
@@ -642,12 +661,12 @@ void SingleCycleSimulator::printRegisters() {
 }
 
 void SingleCycleSimulator::printMatrixDescriptors() {
-    std::cout << "\n=== Matrix Descriptors ===" << std::endl;
+    std::cout << "\n=== Matrix Special Purpose Registers (MSPRs) ===" << std::endl;
     for (int i = 0; i < NUM_MATRIX_DESCRIPTORS; i++) {
-        if (matrixDescriptors[i].valid) {
-            std::cout << "M" << i << ": " << matrixDescriptors[i].rows << "x"
-                << matrixDescriptors[i].cols << " at address "
-                << matrixDescriptors[i].baseAddress << std::endl;
+        if (mspr.isValid(i)) {
+            std::cout << "MR" << i << ": " << (int)mspr.readRows(i) << "x"
+                << (int)mspr.readCols(i) << " at BASE=0x" << std::hex
+                << mspr.readBase(i) << std::dec << std::endl;
         }
     }
 }

@@ -20,17 +20,14 @@ PipelinedSimulator::PipelinedSimulator() {
         memory[i] = 0;
     }
 
-    for (int i = 0; i < NUM_MATRIX_DESCRIPTORS; i++) {
-        matrixDescriptors[i].valid = false;
-        matrixDescriptors[i].baseAddress = 0;
-        matrixDescriptors[i].rows = 0;
-        matrixDescriptors[i].cols = 0;
-    }
+    // MSPR bank auto-initializes via constructor
+    mspr.reset();  // Explicit reset for clarity
 
     traceFile.open("pipeline_trace.txt");
     traceFile << "========================================" << std::endl;
     traceFile << "Pipeline Execution Trace - Enhanced" << std::endl;
     traceFile << "With Data & Control Hazard Handling" << std::endl;
+    traceFile << "With MSPR System" << std::endl;
     traceFile << "========================================" << std::endl;
 }
 
@@ -92,7 +89,8 @@ void PipelinedSimulator::handleControlHazard() {
     if (EX_MEM.branchTaken && EX_MEM.valid) {
         flush = true;
         IF_ID.valid = false;  // Flush the instruction after branch
-        traceFile << "  [FLUSH] Flushing IF/ID due to taken branch" << std::endl;
+        ID_EX.valid = false;  // ALSO flush the instruction that just entered ID/EX!
+        traceFile << "  [FLUSH] Flushing IF/ID and ID/EX due to taken branch" << std::endl;
     }
 }
 
@@ -296,64 +294,88 @@ void PipelinedSimulator::execute() {
 
         switch (inst.opcode) {
         case OP_DECLAREM: {
-            matrixDescriptors[inst.md].rows = inst.rows;
-            matrixDescriptors[inst.md].cols = inst.cols;
-            matrixDescriptors[inst.md].valid = true;
+            // Allocate MSPR in EX stage, memory initialization happens in MEM stage
             static int nextAddress = 400;
-            matrixDescriptors[inst.md].baseAddress = nextAddress;
+            uint32_t allocBase = nextAddress;
             nextAddress += inst.rows * inst.cols;
-            for (int i = 0; i < inst.rows * inst.cols; i++) {
-                memory[matrixDescriptors[inst.md].baseAddress + i] = 0;
-            }
+
+            // Write to MSPR immediately in EX
+            mspr.writeMatrix(inst.md, allocBase, inst.rows, inst.cols);
+
+            // Mark that we need to zero-initialize in MEM stage
+            EX_MEM.aluResult = allocBase;  // Pass base address to MEM stage
+            EX_MEM.memWrite = true;  // Signal to MEM stage
+
             traceFile << "DECLAREM M" << inst.md << "[" << inst.rows << "x" << inst.cols
-                << "]@" << matrixDescriptors[inst.md].baseAddress << std::endl;
+                << "]@" << allocBase << " [MSPR allocated]" << std::endl;
             break;
         }
 
         case OP_LOADM: {
-            if (matrixDescriptors[inst.md].valid) {
+            traceFile << "LOADM_DEBUG: md=" << inst.md << " valid=" << mspr.isValid(inst.md);
+            if (mspr.isValid(inst.md)) {
                 int srcAddr = inst.address;
-                int destAddr = matrixDescriptors[inst.md].baseAddress;
-                int size = matrixDescriptors[inst.md].rows * matrixDescriptors[inst.md].cols;
+                int destAddr = mspr.readBase(inst.md);
+                int size = mspr.readRows(inst.md) * mspr.readCols(inst.md);
+
+                traceFile << " src=" << srcAddr << " dest=" << destAddr << " size=" << size;
+
                 for (int i = 0; i < size; i++) {
                     memory[destAddr + i] = memory[srcAddr + i];
                 }
-                traceFile << "LOADM M" << inst.md << " from[" << srcAddr << "]" << std::endl;
+                traceFile << " LOADM M" << inst.md << " from[" << srcAddr << "] COMPLETE!" << std::endl;
+            }
+            else {
+                traceFile << " INVALID MSPR!" << std::endl;
             }
             break;
         }
 
         case OP_STOREM: {
-            if (matrixDescriptors[inst.md].valid) {
-                int srcAddr = matrixDescriptors[inst.md].baseAddress;
+            traceFile << "STOREM_DEBUG: md=" << inst.md << " valid=" << mspr.isValid(inst.md);
+            if (mspr.isValid(inst.md)) {
+                int srcAddr = mspr.readBase(inst.md);
                 int destAddr = inst.address;
-                int size = matrixDescriptors[inst.md].rows * matrixDescriptors[inst.md].cols;
+                int size = mspr.readRows(inst.md) * mspr.readCols(inst.md);
+
+                traceFile << " src=" << srcAddr << " dest=" << destAddr << " size=" << size << std::endl;
+                traceFile << "  Writing: ";
+
+                // Perform memory copy in EX stage (simplified model)
                 for (int i = 0; i < size; i++) {
-                    memory[destAddr + i] = memory[srcAddr + i];
+                    int value = memory[srcAddr + i];
+                    memory[destAddr + i] = value;
+                    traceFile << "[" << (destAddr + i) << "]=" << value << " ";
                 }
-                traceFile << "STOREM M" << inst.md << " to[" << destAddr << "]" << std::endl;
+
+                traceFile << std::endl;
+                traceFile << "  STOREM M" << inst.md << " COMPLETE!" << std::endl;
+            }
+            else {
+                traceFile << " INVALID MSPR!" << std::endl;
             }
             break;
         }
 
         case OP_ADDM: {
-            if (matrixDescriptors[inst.ms1].valid && matrixDescriptors[inst.ms2].valid) {
-                int rows = matrixDescriptors[inst.ms1].rows;
-                int cols = matrixDescriptors[inst.ms1].cols;
-                matrixDescriptors[inst.md].rows = rows;
-                matrixDescriptors[inst.md].cols = cols;
-                matrixDescriptors[inst.md].valid = true;
+            if (mspr.isValid(inst.ms1) && mspr.isValid(inst.ms2)) {
+                int rows = mspr.readRows(inst.ms1);
+                int cols = mspr.readCols(inst.ms1);
 
-                if (matrixDescriptors[inst.md].baseAddress == 0 ||
-                    matrixDescriptors[inst.md].baseAddress < 400) {
+                if (mspr.readBase(inst.md) == 0 || mspr.readBase(inst.md) < 400) {
                     static int nextAddr = 600;
-                    matrixDescriptors[inst.md].baseAddress = nextAddr;
+                    mspr.writeMatrix(inst.md, nextAddr, rows, cols);  // Atomic write
                     nextAddr += rows * cols;
                 }
+                else {
+                    mspr.writeRows(inst.md, rows);
+                    mspr.writeCols(inst.md, cols);
+                    mspr.setValid(inst.md, true);
+                }
 
-                int addr1 = matrixDescriptors[inst.ms1].baseAddress;
-                int addr2 = matrixDescriptors[inst.ms2].baseAddress;
-                int addrDest = matrixDescriptors[inst.md].baseAddress;
+                int addr1 = mspr.readBase(inst.ms1);
+                int addr2 = mspr.readBase(inst.ms2);
+                int addrDest = mspr.readBase(inst.md);
 
                 for (int i = 0; i < rows * cols; i++) {
                     memory[addrDest + i] = memory[addr1 + i] + memory[addr2 + i];
@@ -364,23 +386,24 @@ void PipelinedSimulator::execute() {
         }
 
         case OP_SUBM: {
-            if (matrixDescriptors[inst.ms1].valid && matrixDescriptors[inst.ms2].valid) {
-                int rows = matrixDescriptors[inst.ms1].rows;
-                int cols = matrixDescriptors[inst.ms1].cols;
-                matrixDescriptors[inst.md].rows = rows;
-                matrixDescriptors[inst.md].cols = cols;
-                matrixDescriptors[inst.md].valid = true;
+            if (mspr.isValid(inst.ms1) && mspr.isValid(inst.ms2)) {
+                int rows = mspr.readRows(inst.ms1);
+                int cols = mspr.readCols(inst.ms1);
 
-                if (matrixDescriptors[inst.md].baseAddress == 0 ||
-                    matrixDescriptors[inst.md].baseAddress < 400) {
+                if (mspr.readBase(inst.md) == 0 || mspr.readBase(inst.md) < 400) {
                     static int nextAddr = 650;
-                    matrixDescriptors[inst.md].baseAddress = nextAddr;
+                    mspr.writeMatrix(inst.md, nextAddr, rows, cols);  // Atomic write
                     nextAddr += rows * cols;
                 }
+                else {
+                    mspr.writeRows(inst.md, rows);
+                    mspr.writeCols(inst.md, cols);
+                    mspr.setValid(inst.md, true);
+                }
 
-                int addr1 = matrixDescriptors[inst.ms1].baseAddress;
-                int addr2 = matrixDescriptors[inst.ms2].baseAddress;
-                int addrDest = matrixDescriptors[inst.md].baseAddress;
+                int addr1 = mspr.readBase(inst.ms1);
+                int addr2 = mspr.readBase(inst.ms2);
+                int addrDest = mspr.readBase(inst.md);
 
                 for (int i = 0; i < rows * cols; i++) {
                     memory[addrDest + i] = memory[addr1 + i] - memory[addr2 + i];
@@ -390,10 +413,81 @@ void PipelinedSimulator::execute() {
             break;
         }
 
+        case OP_MULM: {
+            if (mspr.isValid(inst.ms1) && mspr.isValid(inst.ms2)) {
+                int m = mspr.readRows(inst.ms1);
+                int n = mspr.readCols(inst.ms1);
+                int p = mspr.readCols(inst.ms2);
+
+                // Allocate MSPR for result (m x p)
+                if (mspr.readBase(inst.md) == 0 || mspr.readBase(inst.md) < 400) {
+                    static int nextAddr = 500;
+                    mspr.writeMatrix(inst.md, nextAddr, m, p);  // Result is m x p
+                    nextAddr += m * p;
+                }
+                else {
+                    mspr.writeRows(inst.md, m);
+                    mspr.writeCols(inst.md, p);
+                    mspr.setValid(inst.md, true);
+                }
+
+                int baseA = mspr.readBase(inst.ms1);
+                int baseB = mspr.readBase(inst.ms2);
+                int baseC = mspr.readBase(inst.md);
+
+                // Matrix multiplication: C = A × B
+                for (int i = 0; i < m; i++) {
+                    for (int j = 0; j < p; j++) {
+                        int sum = 0;
+                        for (int k = 0; k < n; k++) {
+                            sum += memory[baseA + i * n + k] * memory[baseB + k * p + j];
+                        }
+                        memory[baseC + i * p + j] = sum;
+                    }
+                }
+
+                traceFile << "MULM M" << inst.md << "=M" << inst.ms1 << "×M" << inst.ms2
+                    << " (" << m << "×" << n << ")×(" << n << "×" << p << ")=("
+                    << m << "×" << p << ")" << std::endl;
+            }
+            break;
+        }
+
+        case OP_SCALE: {
+            if (mspr.isValid(inst.ms1)) {
+                int rows = mspr.readRows(inst.ms1);
+                int cols = mspr.readCols(inst.ms1);
+                int scalar = registers[inst.rs1];
+
+                // Allocate MSPR for result
+                if (mspr.readBase(inst.md) == 0 || mspr.readBase(inst.md) < 400) {
+                    static int nextAddr = 500;
+                    mspr.writeMatrix(inst.md, nextAddr, rows, cols);
+                    nextAddr += rows * cols;
+                }
+                else {
+                    mspr.writeRows(inst.md, rows);
+                    mspr.writeCols(inst.md, cols);
+                    mspr.setValid(inst.md, true);
+                }
+
+                int srcAddr = mspr.readBase(inst.ms1);
+                int destAddr = mspr.readBase(inst.md);
+
+                for (int i = 0; i < rows * cols; i++) {
+                    memory[destAddr + i] = memory[srcAddr + i] * scalar;
+                }
+
+                traceFile << "SCALE M" << inst.md << "=M" << inst.ms1 << "×R" << inst.rs1
+                    << "(=" << scalar << ")" << std::endl;
+            }
+            break;
+        }
+
         case OP_DETERMINANT: {
-            if (matrixDescriptors[inst.ms1].valid) {
-                int baseAddr = matrixDescriptors[inst.ms1].baseAddress;
-                int n = matrixDescriptors[inst.ms1].rows;
+            if (mspr.isValid(inst.ms1)) {
+                int baseAddr = mspr.readBase(inst.ms1);
+                int n = mspr.readRows(inst.ms1);
                 int det = 0;
 
                 if (n == 1) {
@@ -417,108 +511,151 @@ void PipelinedSimulator::execute() {
             }
             break;
         }
+
+        case OP_TRANSPOSE: {
+            if (mspr.isValid(inst.ms1)) {
+                int rows = mspr.readRows(inst.ms1);
+                int cols = mspr.readCols(inst.ms1);
+
+                // Allocate MSPR for transpose (dimensions swapped!)
+                if (mspr.readBase(inst.md) == 0 || mspr.readBase(inst.md) < 400) {
+                    static int nextAddr = 500;
+                    mspr.writeMatrix(inst.md, nextAddr, cols, rows);  // SWAPPED!
+                    nextAddr += rows * cols;
+                }
+                else {
+                    mspr.writeRows(inst.md, cols);  // SWAPPED!
+                    mspr.writeCols(inst.md, rows);  // SWAPPED!
+                    mspr.setValid(inst.md, true);
+                }
+
+                int srcAddr = mspr.readBase(inst.ms1);
+                int destAddr = mspr.readBase(inst.md);
+
+                // Transpose operation
+                for (int i = 0; i < rows; i++) {
+                    for (int j = 0; j < cols; j++) {
+                        memory[destAddr + j * rows + i] = memory[srcAddr + i * cols + j];
+                    }
+                }
+
+                traceFile << "TRANSPOSE M" << inst.md << "=M" << inst.ms1 << "^T "
+                    << "(" << rows << "×" << cols << ")→(" << cols << "×" << rows << ")"
+                    << std::endl;
+            }
+            break;
+        }
         }
 
-        ID_EX.valid = false;
-        return;
+        // Matrix operations complete - let them propagate to WB stage for instruction counting
+        // DO NOT set ID_EX.valid = false here!
+        // DO NOT return early!
+        // Let the instruction flow through MEM and WB stages
+
+        traceFile << std::endl;
+
+        // Clear ID/EX (moved to end of function)
+        // ID_EX.valid = false;  // MOVED TO BOTTOM
+        // Fall through to continue pipeline flow
     }
+    else {
+        // Execute scalar operations (only if NOT a matrix operation)
+        switch (inst.opcode) {
+        case OP_ADD:
+            EX_MEM.aluResult = operand1 + operand2;
+            traceFile << " Result=" << EX_MEM.aluResult;
+            break;
+        case OP_SUB:
+            EX_MEM.aluResult = operand1 - operand2;
+            traceFile << " Result=" << EX_MEM.aluResult;
+            break;
+        case OP_ADDI:
+            EX_MEM.aluResult = operand1 + inst.immediate;
+            traceFile << " Result=" << EX_MEM.aluResult;
+            break;
+        case OP_SUBI:
+            EX_MEM.aluResult = operand1 - inst.immediate;
+            traceFile << " Result=" << EX_MEM.aluResult;
+            break;
+        case OP_MUL:
+            EX_MEM.aluResult = operand1 * operand2;
+            traceFile << " Result=" << EX_MEM.aluResult;
+            break;
+        case OP_DIV:
+            EX_MEM.aluResult = (operand2 != 0) ? operand1 / operand2 : 0;
+            traceFile << " Result=" << EX_MEM.aluResult;
+            break;
+        case OP_LI:
+            EX_MEM.aluResult = inst.immediate;
+            traceFile << " Result=" << inst.immediate;
+            break;
+        case OP_MOV:
+            EX_MEM.aluResult = operand1;
+            traceFile << " Result=" << operand1;
+            break;
+        case OP_LW:
+            EX_MEM.aluResult = operand1 + inst.offset;
+            traceFile << " MemAddr=" << EX_MEM.aluResult;
+            break;
+        case OP_SW:
+            EX_MEM.aluResult = operand1 + inst.offset;
+            // Forward write data if needed
+            EX_MEM.memWriteData = registers[inst.rd];
+            int forwardedWriteData;
+            if (needsForwarding(inst.rd, forwardedWriteData)) {
+                EX_MEM.memWriteData = forwardedWriteData;
+            }
+            traceFile << " MemAddr=" << EX_MEM.aluResult << " Data=" << EX_MEM.memWriteData;
+            break;
+        case OP_BEQ:
+            EX_MEM.branchTaken = (operand1 == operand2);
+            if (EX_MEM.branchTaken) {
+                pc = inst.target;
+                traceFile << " TAKEN→PC=" << pc;
+            }
+            else {
+                traceFile << " NOT_TAKEN";
+            }
+            break;
+        case OP_BNE:
+            EX_MEM.branchTaken = (operand1 != operand2);
+            if (EX_MEM.branchTaken) {
+                pc = inst.target;
+                traceFile << " TAKEN→PC=" << pc;
+            }
+            else {
+                traceFile << " NOT_TAKEN";
+            }
+            break;
+        case OP_BGT:
+            EX_MEM.branchTaken = (operand1 > operand2);
+            if (EX_MEM.branchTaken) {
+                pc = inst.target;
+                traceFile << " TAKEN→PC=" << pc;
+            }
+            break;
+        case OP_BLT:
+            EX_MEM.branchTaken = (operand1 < operand2);
+            if (EX_MEM.branchTaken) {
+                pc = inst.target;
+                traceFile << " TAKEN→PC=" << pc;
+            }
+            break;
+        case OP_J:
+            pc = inst.target;
+            EX_MEM.branchTaken = true;
+            traceFile << " JUMP→PC=" << pc;
+            break;
+        case OP_HALT:
+            halted = true;
+            traceFile << " HALT";
+            break;
+        }
 
-    // Execute scalar operations
-    switch (inst.opcode) {
-    case OP_ADD:
-        EX_MEM.aluResult = operand1 + operand2;
-        traceFile << " Result=" << EX_MEM.aluResult;
-        break;
-    case OP_SUB:
-        EX_MEM.aluResult = operand1 - operand2;
-        traceFile << " Result=" << EX_MEM.aluResult;
-        break;
-    case OP_ADDI:
-        EX_MEM.aluResult = operand1 + inst.immediate;
-        traceFile << " Result=" << EX_MEM.aluResult;
-        break;
-    case OP_SUBI:
-        EX_MEM.aluResult = operand1 - inst.immediate;
-        traceFile << " Result=" << EX_MEM.aluResult;
-        break;
-    case OP_MUL:
-        EX_MEM.aluResult = operand1 * operand2;
-        traceFile << " Result=" << EX_MEM.aluResult;
-        break;
-    case OP_DIV:
-        EX_MEM.aluResult = (operand2 != 0) ? operand1 / operand2 : 0;
-        traceFile << " Result=" << EX_MEM.aluResult;
-        break;
-    case OP_LI:
-        EX_MEM.aluResult = inst.immediate;
-        traceFile << " Result=" << inst.immediate;
-        break;
-    case OP_MOV:
-        EX_MEM.aluResult = operand1;
-        traceFile << " Result=" << operand1;
-        break;
-    case OP_LW:
-        EX_MEM.aluResult = operand1 + inst.offset;
-        traceFile << " MemAddr=" << EX_MEM.aluResult;
-        break;
-    case OP_SW:
-        EX_MEM.aluResult = operand1 + inst.offset;
-        // Forward write data if needed
-        EX_MEM.memWriteData = registers[inst.rd];
-        int forwardedWriteData;
-        if (needsForwarding(inst.rd, forwardedWriteData)) {
-            EX_MEM.memWriteData = forwardedWriteData;
-        }
-        traceFile << " MemAddr=" << EX_MEM.aluResult << " Data=" << EX_MEM.memWriteData;
-        break;
-    case OP_BEQ:
-        EX_MEM.branchTaken = (operand1 == operand2);
-        if (EX_MEM.branchTaken) {
-            pc = inst.target;
-            traceFile << " TAKEN→PC=" << pc;
-        }
-        else {
-            traceFile << " NOT_TAKEN";
-        }
-        break;
-    case OP_BNE:
-        EX_MEM.branchTaken = (operand1 != operand2);
-        if (EX_MEM.branchTaken) {
-            pc = inst.target;
-            traceFile << " TAKEN→PC=" << pc;
-        }
-        else {
-            traceFile << " NOT_TAKEN";
-        }
-        break;
-    case OP_BGT:
-        EX_MEM.branchTaken = (operand1 > operand2);
-        if (EX_MEM.branchTaken) {
-            pc = inst.target;
-            traceFile << " TAKEN→PC=" << pc;
-        }
-        break;
-    case OP_BLT:
-        EX_MEM.branchTaken = (operand1 < operand2);
-        if (EX_MEM.branchTaken) {
-            pc = inst.target;
-            traceFile << " TAKEN→PC=" << pc;
-        }
-        break;
-    case OP_J:
-        pc = inst.target;
-        EX_MEM.branchTaken = true;
-        traceFile << " JUMP→PC=" << pc;
-        break;
-    case OP_HALT:
-        halted = true;
-        traceFile << " HALT";
-        break;
-    }
+        traceFile << std::endl;
+    }  // End of else block for scalar operations
 
-    traceFile << std::endl;
-
-    // Clear ID/EX
+    // Clear ID/EX - this now happens for ALL instructions (matrix and scalar)
     ID_EX.valid = false;
 }
 
@@ -586,8 +723,8 @@ void PipelinedSimulator::writeBack() {
         // Count instructions that don't write to registers
         if (MEM_WB.inst.opcode == OP_SW || MEM_WB.inst.opcode == OP_HALT ||
             (MEM_WB.inst.opcode >= OP_BEQ && MEM_WB.inst.opcode <= OP_J) ||
-            (MEM_WB.inst.opcode >= OP_DECLAREM && MEM_WB.inst.opcode <= OP_STOREM) ||
-            MEM_WB.inst.opcode == OP_ADDM || MEM_WB.inst.opcode == OP_SUBM) {
+            (MEM_WB.inst.opcode >= OP_DECLAREM && MEM_WB.inst.opcode <= OP_TRANSPOSE)) {
+            // This now covers ALL matrix operations: DECLAREM(0) through TRANSPOSE(8)
             instructionCount++;
         }
     }

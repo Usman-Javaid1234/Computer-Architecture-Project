@@ -1,39 +1,156 @@
 === Execution Trace ===
 
 Cycle 0, PC=0
-  LW R1 = MEM[100] (=10)
+  DECLAREM M0, 3, 2 -> Base: 400 [MSPR Write: Atomic]
 
 Cycle 1, PC=1
-  BLT R1 (=10), R0 (=0) -> NOT TAKEN
+  LOADM M0 from 0
 
-Cycle 2, PC=2
-  LI R2 = 1
+Cycle 7, PC=2
+  STOREM M0 to 200
 
-Cycle 3, PC=3
-  LW R3 = MEM[104] (=20)
+Cycle 13, PC=3
+  TRANSPOSE M1 = M0^T [Dims: 2x3]
 
-Cycle 4, PC=4
-  ADD R4 = R3 + R1 (=30)
+Cycle 19, PC=4
+  STOREM M1 to 250
 
-Cycle 5, PC=5
-  LW R5 = MEM[108] (=5)
+Cycle 25, PC=5
+  MULM M2 = M0 * M1 [MSPR Dest: 500]
 
-Cycle 6, PC=6
-  SUBI R5 = R5 - 1 (=4)
+Cycle 43, PC=6
+  STOREM M2 to 300
 
-Cycle 7, PC=7
-  BNE R5 (=4), R0 (=0) -> BRANCH TAKEN to 9
+Cycle 52, PC=7
+  MULM M3 = M1 * M0 [MSPR Dest: 509]
 
-Cycle 8, PC=9
-  BLT R5 (=4), R1 (=10) -> BRANCH TAKEN to 11
+Cycle 64, PC=8
+  STOREM M3 to 350
 
-Cycle 9, PC=11
-  SW MEM[112] = R4 (=30)
+Cycle 68, PC=9
+  DETERMINANT R10 = det(M3) = -48
 
-Cycle 10, PC=12
+Cycle 76, PC=10
+  SW MEM[400] = R10 (=-48)
+
+Cycle 77, PC=11
+  DECLAREM M4, 2, 2 -> Base: 406 [MSPR Write: Atomic]
+
+Cycle 78, PC=12
+  MOV R11 = R10 (=-48)
+
+Cycle 79, PC=13
+  LI R12 = 1
+
+Cycle 80, PC=14
+  LI R13 = 0
+
+Cycle 81, PC=15
+  LW R14 = MEM[350] (=123)
+
+Cycle 82, PC=16
+  LW R15 = MEM[353] (=356)
+
+Cycle 83, PC=17
+  ADD R16 = R14 + R15 (=479)
+
+Cycle 84, PC=18
+  SW MEM[404] = R16 (=479)
+
+Cycle 85, PC=19
+  DECLAREM M5, 2, 2 -> Base: 410 [MSPR Write: Atomic]
+
+Cycle 86, PC=20
+  DECLAREM M6, 2, 2 -> Base: 414 [MSPR Write: Atomic]
+
+Cycle 87, PC=21
+  LI R20 = 10
+
+Cycle 88, PC=22
+  SW MEM[500] = R20 (=10)
+
+Cycle 89, PC=23
+  LI R20 = 20
+
+Cycle 90, PC=24
+  SW MEM[501] = R20 (=20)
+
+Cycle 91, PC=25
+  LI R20 = 30
+
+Cycle 92, PC=26
+  SW MEM[502] = R20 (=30)
+
+Cycle 93, PC=27
+  LI R20 = 40
+
+Cycle 94, PC=28
+  SW MEM[503] = R20 (=40)
+
+Cycle 95, PC=29
+  LOADM M5 from 500
+
+Cycle 99, PC=30
+  LI R20 = 5
+
+Cycle 100, PC=31
+  SW MEM[510] = R20 (=5)
+
+Cycle 101, PC=32
+  SW MEM[511] = R20 (=5)
+
+Cycle 102, PC=33
+  SW MEM[512] = R20 (=5)
+
+Cycle 103, PC=34
+  SW MEM[513] = R20 (=5)
+
+Cycle 104, PC=35
+  LOADM M6 from 510
+
+Cycle 108, PC=36
+  SUBM M7 = M5 - M6 [MSPR Dest: 650]
+
+Cycle 112, PC=37
+  STOREM M7 to 520
+
+Cycle 116, PC=38
+  LW R25 = MEM[104] (=112)
+
+Cycle 117, PC=39
+  BEQ R10 (=-48), R25 (=112) -> NOT TAKEN
+
+Cycle 118, PC=40
+  LI R30 = 0
+
+Cycle 119, PC=41
+  SW MEM[600] = R30 (=0)
+
+Cycle 120, PC=42
+  J -> Jump to 45
+
+Cycle 121, PC=45
+  MUL R26 = R16 * R10 (=-22992)
+
+Cycle 122, PC=46
+  LI R27 = 2
+
+Cycle 123, PC=47
+  DIV R28 = R26 / R27 (=-11496)
+
+Cycle 124, PC=48
+  SW MEM[604] = R28 (=-11496)
+
+Cycle 125, PC=49
+  LI R31 = 8
+
+Cycle 126, PC=50
+  SW MEM[608] = R31 (=8)
+
+Cycle 127, PC=51
   HALT - Program terminated
 
 === Execution Complete ===
-Total Cycles: 10
-Instructions Executed: 11
-CPI: 0.909091
+Total Cycles: 127
+Instructions Executed: 50
+CPI: 2.54

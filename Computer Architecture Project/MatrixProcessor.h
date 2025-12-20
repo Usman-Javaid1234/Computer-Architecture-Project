@@ -15,7 +15,7 @@
 const int MEMORY_SIZE = 1024;              // Data memory size in words
 const int INSTRUCTION_MEMORY_SIZE = 256;   // Instruction memory size
 const int NUM_REGISTERS = 32;              // General purpose registers
-const int NUM_MATRIX_DESCRIPTORS = 16;     // Matrix descriptors M0-M15
+const int NUM_MATRIX_DESCRIPTORS = 16;     // Matrix SPRs M0-M15
 
 // Instruction Opcodes
 enum Opcode {
@@ -49,14 +49,134 @@ enum Opcode {
     OP_HALT = 63        // 111111 - Halt execution
 };
 
-// Matrix Descriptor Structure
-struct MatrixDescriptor {
-    int baseAddress;
-    int rows;
-    int cols;
-    bool valid;
+// Matrix Special Purpose Register (MSPR) System
+// Replaces MatrixDescriptor with hardware-realizable register bank
+class MSPRBank {
+private:
+    struct MSPRSet {
+        uint32_t base;      // MRx_BASE: Base memory address (32 bits)
+        uint8_t rows;       // MRx_ROWS: Number of rows (8 bits, max 255)
+        uint8_t cols;       // MRx_COLS: Number of columns (8 bits, max 255)
+        uint32_t ctrl;      // MRx_CTRL: Control/status register
+        //   Bit 0: VALID flag
+        //   Bit 1: BUSY flag (for pipeline)
+        //   Bits [7:2]: Reserved
+        //   Bits [15:8]: Element size
+        //   Bits [31:16]: Reserved
 
-    MatrixDescriptor() : baseAddress(0), rows(0), cols(0), valid(false) {}
+        MSPRSet() : base(0), rows(0), cols(0), ctrl(0) {}
+    };
+
+    MSPRSet registers[NUM_MATRIX_DESCRIPTORS];  // Hardware register bank (16 sets)
+
+public:
+    MSPRBank() {
+        reset();
+    }
+
+    // Hardware reset - clears all MSPRs
+    void reset() {
+        for (int i = 0; i < NUM_MATRIX_DESCRIPTORS; i++) {
+            registers[i].base = 0;
+            registers[i].rows = 0;
+            registers[i].cols = 0;
+            registers[i].ctrl = 0;
+        }
+    }
+
+    // Dual-port read operations (simulates hardware dual-port read)
+    uint32_t readBase(int id) const {
+        if (id < 0 || id >= NUM_MATRIX_DESCRIPTORS) return 0;
+        return registers[id].base;
+    }
+
+    uint8_t readRows(int id) const {
+        if (id < 0 || id >= NUM_MATRIX_DESCRIPTORS) return 0;
+        return registers[id].rows;
+    }
+
+    uint8_t readCols(int id) const {
+        if (id < 0 || id >= NUM_MATRIX_DESCRIPTORS) return 0;
+        return registers[id].cols;
+    }
+
+    bool isValid(int id) const {
+        if (id < 0 || id >= NUM_MATRIX_DESCRIPTORS) return false;
+        return registers[id].ctrl & 0x1;
+    }
+
+    bool isBusy(int id) const {
+        if (id < 0 || id >= NUM_MATRIX_DESCRIPTORS) return false;
+        return registers[id].ctrl & 0x2;
+    }
+
+    // Individual field write operations
+    void writeBase(int id, uint32_t value) {
+        if (id >= 0 && id < NUM_MATRIX_DESCRIPTORS)
+            registers[id].base = value;
+    }
+
+    void writeRows(int id, uint8_t value) {
+        if (id >= 0 && id < NUM_MATRIX_DESCRIPTORS)
+            registers[id].rows = value;
+    }
+
+    void writeCols(int id, uint8_t value) {
+        if (id >= 0 && id < NUM_MATRIX_DESCRIPTORS)
+            registers[id].cols = value;
+    }
+
+    void setValid(int id, bool valid) {
+        if (id < 0 || id >= NUM_MATRIX_DESCRIPTORS) return;
+        if (valid)
+            registers[id].ctrl |= 0x1;
+        else
+            registers[id].ctrl &= ~0x1;
+    }
+
+    void setBusy(int id, bool busy) {
+        if (id < 0 || id >= NUM_MATRIX_DESCRIPTORS) return;
+        if (busy)
+            registers[id].ctrl |= 0x2;
+        else
+            registers[id].ctrl &= ~0x2;
+    }
+
+    // Atomic write (for DECLAREM - simulates parallel register write in hardware)
+    void writeMatrix(int id, uint32_t base, uint8_t rows, uint8_t cols) {
+        if (id < 0 || id >= NUM_MATRIX_DESCRIPTORS) return;
+        registers[id].base = base;
+        registers[id].rows = rows;
+        registers[id].cols = cols;
+        registers[id].ctrl = 0x1;  // Set VALID bit
+    }
+
+    // Read all fields atomically (for forwarding in pipeline)
+    void readMatrix(int id, uint32_t& base, uint8_t& rows, uint8_t& cols, bool& valid) const {
+        if (id < 0 || id >= NUM_MATRIX_DESCRIPTORS) {
+            base = 0; rows = 0; cols = 0; valid = false;
+            return;
+        }
+        base = registers[id].base;
+        rows = registers[id].rows;
+        cols = registers[id].cols;
+        valid = registers[id].ctrl & 0x1;
+    }
+
+    // Debug/trace support
+    void printMSPR(int id, std::ostream& out) const {
+        if (id < 0 || id >= NUM_MATRIX_DESCRIPTORS) return;
+        out << "MR" << id << ": ";
+        if (isValid(id)) {
+            out << "BASE=0x" << std::hex << registers[id].base << std::dec
+                << " ROWS=" << (int)registers[id].rows
+                << " COLS=" << (int)registers[id].cols
+                << " [VALID]";
+        }
+        else {
+            out << "[INVALID]";
+        }
+    }
 };
 
 // Instruction Structure
@@ -120,7 +240,7 @@ class SingleCycleSimulator {
 private:
     int memory[MEMORY_SIZE];
     int registers[NUM_REGISTERS];
-    MatrixDescriptor matrixDescriptors[NUM_MATRIX_DESCRIPTORS];
+    MSPRBank mspr;  // CHANGED: Matrix SPR Bank replaces matrixDescriptors
     std::vector<uint32_t> instructionMemory;
     std::vector<Instruction> decodedInstructions;
     int pc;
@@ -178,20 +298,33 @@ public:
     int getInstructionCount() const { return instructionCount; }
     double getCPI() const { return instructionCount > 0 ? (double)cycleCount / instructionCount : 0; }
 };
+
 struct PipelineRegister {
     bool valid;
     Instruction inst;
     uint32_t pc;
 
-    // ID/EX stage
+    // ID/EX stage - MSPR forwarding fields
     int readData1, readData2;
     int immediate;
     bool branchTaken;
+
+    // MSPR read values (for forwarding)
+    uint32_t mspr_base_s1, mspr_base_s2;
+    uint8_t mspr_rows_s1, mspr_rows_s2;
+    uint8_t mspr_cols_s1, mspr_cols_s2;
+    bool mspr_valid_s1, mspr_valid_s2;
 
     // EX/MEM stage
     int aluResult;
     int memWriteData;
     bool memRead, memWrite;
+
+    // MSPR write signals (for WB stage)
+    bool mspr_write;
+    int mspr_write_id;
+    uint32_t mspr_write_base;
+    uint8_t mspr_write_rows, mspr_write_cols;
 
     // MEM/WB stage
     int memReadData;
@@ -203,7 +336,10 @@ struct PipelineRegister {
         immediate(0), branchTaken(false), aluResult(0),
         memWriteData(0), memRead(false), memWrite(false),
         memReadData(0), writeBackData(0), regWrite(false),
-        destReg(0) {
+        destReg(0), mspr_write(false), mspr_write_id(0),
+        mspr_write_base(0), mspr_write_rows(0), mspr_write_cols(0),
+        mspr_base_s1(0), mspr_base_s2(0), mspr_rows_s1(0), mspr_rows_s2(0),
+        mspr_cols_s1(0), mspr_cols_s2(0), mspr_valid_s1(false), mspr_valid_s2(false) {
     }
 };
 
@@ -212,7 +348,7 @@ private:
     // Memory and registers
     int memory[MEMORY_SIZE];
     int registers[NUM_REGISTERS];
-    MatrixDescriptor matrixDescriptors[NUM_MATRIX_DESCRIPTORS];
+    MSPRBank mspr;  // CHANGED: Matrix SPR Bank replaces matrixDescriptors
 
     // Instruction memory
     std::vector<uint32_t> instructionMemory;
